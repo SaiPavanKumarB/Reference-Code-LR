@@ -1,0 +1,205 @@
+library(dplyr)
+library(survival)
+library(foreign)
+library(readxl)
+library(psych)
+library(gplots)
+library(ggplot2)
+library(reshape)
+library(reshape2)
+library(scales)
+library(corrplot)
+library(GPArotation)
+library(ggcorrplot)
+library(data.table)
+library(ROCR)
+library(tree)
+library(ResourceSelection)
+library(conjoint)
+library(timeSeries)
+library(neuralnet)
+library(xts)
+library(TTR)
+library(curl)
+library(tseries)
+library(stats)
+library(forecast)
+
+#### Read the input file
+set.seed(101)
+
+carb<-read.csv("~/R/CO2DATA.csv", header = TRUE)
+str(carb)
+
+### gives no. of colums
+length(carb)
+
+### gives no. of rows
+nrow(carb)
+
+stYr<-carb[1,1]
+stMr<-carb[1,2]
+
+#### Create "ts" object and verify slotNames...ts has a slot "tsp" which contains the start, end and frequency of the timeseries. This is needed for HoltWinters()
+
+CO2Data <- ts(carb$interpolated, frequency = 12, start = c(stYr, stMr))
+
+class(CO2Data)
+slotNames(CO2Data)
+start(CO2Data)
+end(CO2Data)
+frequency(CO2Data)
+cycle(CO2Data)
+
+#### Plot the data and plot linear regression line
+
+plot(CO2Data)
+abline(reg=lm(CO2Data~time(CO2Data)))
+
+
+## Create new xts object
+
+sqdt<-as.POSIXct(as.Date(paste(as.character(carb[1,1]),as.character(carb[1,2]),"01",sep = "-")))
+t1 <- as.POSIXct(seq(from=as.Date(sqdt), by="month", length.out = nrow(carb)))
+
+CO2_Data <- xts(x=carb$interpolated,as.POSIXct(t1))
+head(CO2_Data)
+
+
+### Plot full graph again one more time....different graph type since xts object
+
+plot(CO2_Data)
+abline(reg=lm(CO2_Data~time(CO2_Data)))
+
+
+## Plot Yearly averages using new xts object
+ep <- endpoints(CO2_Data,'years')
+nep<- period.apply(CO2_Data,ep,mean)
+
+plot(nep)
+
+
+## Plot Monthly averages using new xts object...here year/month averages are taken
+
+ep <- endpoints(CO2_Data,'months')
+nep<- period.apply(CO2_Data,ep,mean)
+
+plot(nep)
+
+
+## Plot montly boxplots
+
+mnthlydat<-data.frame(format(t1, format="%m"),carb$interpolated)
+
+colnames(mnthlydat)<- c("month","interpolated")
+
+boxplot(interpolated ~ month, data=mnthlydat,las=3,col=c(3,4,5,6),names=c('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'),main = "Monthly Box Plots",xlab = "Months",ylab = "Interpolated")
+points(mnthlydat$month,mnthlydat$interpolated)
+
+
+## Plot Monthly averages using ts object...here year is left out and only monthly averages are taken
+
+moVal <- tapply(CO2Data, cycle(CO2Data), FUN=mean)
+plot(moVal)
+
+
+
+### Run Augmented Dickey Fuller (ADF) test for stationarity...This test first does a de-trend on the series
+
+adf.test(CO2Data, alternative="stationary", k=0)
+
+
+
+### run stl
+
+zd <- stl(CO2Data, s.window = 12)
+plot(zd)
+
+
+
+
+### remove seasonality and trend 
+
+zdcomp<-decompose(CO2Data)
+
+zdcompAdj<-CO2Data - zdcomp$seasonal
+zdcompAdj<-zdcompAdj - zdcomp$trend
+
+plot(decompose(zdcompAdj))
+
+
+
+### remove seasonality and trend again from above
+
+ydcomp<-decompose(zdcompAdj)
+
+ydcompAdj<-zdcompAdj - ydcomp$seasonal
+ydcompAdj<-ydcompAdj - ydcomp$trend
+
+plot(decompose(ydcompAdj))
+
+
+
+### get a subset of the timeseries and play around a bit
+
+sub_CO2<-window(CO2Data, start=c(1958, 3), end=c(1970, 12)) 
+
+h <- HoltWinters(sub_CO2, alpha = 0.5, beta = 0.1, gamma = 0.1, seasonal = "additive")
+plot(sub_CO2)
+plot(h)
+
+
+h <- HoltWinters(sub_CO2, alpha = 0.5, beta = 0.1, gamma = 0.1, seasonal = "multiplicative")
+plot(sub_CO2)
+plot(h)
+
+
+auto.arima(sub_CO2, seasonal=TRUE)
+auto.arima(ydcompAdj, seasonal=FALSE)
+auto.arima(CO2Data, seasonal=TRUE)
+
+
+
+
+### auto arima on full data set and forecasting future, display residuals
+fit<-auto.arima(CO2Data, seasonal=TRUE)
+tsdisplay(residuals(fit), lag.max=45, main='Model Residuals')
+
+
+fcast <- forecast(fit, h=30)
+plot(fcast,main="AUTO ARIMA on full data and predicting forecast")
+
+
+
+### create a hold out and predict the remaining using auto arima and holt winters
+
+holdX<-window(CO2Data, start=c(1958, 3), end=c(2011, 12)) 
+holdY<-window(CO2Data, start=c(2012, 1), end=c(2017, 3)) 
+
+fitX<-auto.arima(holdX, seasonal=TRUE)
+fcastY <- forecast(fitX, h=63)
+plot(fcastY,main="AUTO ARIMA using hold out and prediction")
+lines(CO2Data)
+
+
+fitX <- HoltWinters(holdX, alpha = 0.5, beta = 0.1, gamma = 0.1, seasonal = "additive")
+fcastY <- forecast(fitX, h=63)
+plot(fcastY,main="HoltWinters with alpha = 0.5, beta = 0.1, gamma = 0.1")
+lines(CO2Data)
+
+
+fitX <- HoltWinters(holdX, alpha = 0.5, beta = 0.3, gamma = 0.2, seasonal = "additive")
+fcastY <- forecast(fitX, h=63)
+plot(fcastY,main="HoltWinters with alpha = 0.5, beta = 0.3, gamma = 0.2")
+lines(CO2Data)
+
+
+fitX <- HoltWinters(holdX, alpha = 0.2, beta = 0.1, gamma = NULL, seasonal = "additive")
+fcastY <- forecast(fitX, h=63)
+plot(fcastY,main="HoltWinters with alpha = 0.2, beta = 0.1, gamma = NULL")
+lines(CO2Data)
+
+fitX <- HoltWinters(holdX, alpha = 0.1, beta = NULL, gamma = NULL, seasonal = "additive")
+fcastY <- forecast(fitX, h=63)
+plot(fcastY,main="HoltWinters with alpha = 0.1, beta = NULL, gamma = NULL")
+lines(CO2Data)
